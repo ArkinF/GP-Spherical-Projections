@@ -1,10 +1,13 @@
 import gpytorch
 
 class ExactGPModel(gpytorch.models.ExactGP):
-    def __init__(self, train_x, train_y, likelihood, kernel):
+    def __init__(self, train_x, train_y, likelihood, kernel, mean_module=None):
         super().__init__(train_x, train_y, likelihood)
         self.likelihood = likelihood
-        self.mean_module = gpytorch.means.ZeroMean()
+        if mean_module is None:
+            self.mean_module = gpytorch.means.ZeroMean()
+        else:
+            self.mean_module = mean_module
         self.covar_module = kernel
 
     def forward(self, x):

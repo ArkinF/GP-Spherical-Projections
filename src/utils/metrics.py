@@ -21,20 +21,50 @@ def compute_cov95_and_piwidth(y_true, mu, var, center_offset=None):
     return float(coverage), float(width)
 
 def extract_hyp(model, likelihood=None):
-    """extract hyperparameters from model"""
-    k = model.covar_module
-    w = k.mixture_weights.detach().cpu().numpy().flatten()
-    m = k.mixture_means.detach().cpu().numpy().flatten()
-    s = k.mixture_scales.detach().cpu().numpy().flatten()
+    """extract hyperparameters from model, handling different kernel types"""
+    kernel = model.covar_module
+    
+    # noise variance
     if likelihood is None:
         noise_var = model.likelihood.noise.detach().cpu().item()
     else:
         noise_var = likelihood.noise.detach().cpu().item()
-
-    if w.size == 1:
-        return [float(w.item()), float(s.item()), float(m.item()), noise_var]
-    else:
-        return [w, s, m, noise_var]
+    
+    # extract based kernel
+    if hasattr(kernel, 'mixture_weights'):  # Spectral Mixture kernel
+        w = kernel.mixture_weights.detach().cpu().numpy().flatten()
+        m = kernel.mixture_means.detach().cpu().numpy().flatten()
+        s = kernel.mixture_scales.detach().cpu().numpy().flatten()
+        
+        if w.size == 1:
+            return [float(w.item()), float(s.item()), float(m.item()), noise_var]
+        else:
+            return [w, s, m, noise_var]
+    
+    elif hasattr(kernel, 'base_kernel'): # other kernels with ScaleKernel wrapper (added for stability)
+        base_kernel = kernel.base_kernel
+        outputscale = kernel.outputscale.detach().cpu().item()
+        
+        if hasattr(base_kernel, 'kernels'):  # composite kernels (like periodic * rbf)
+            params = []
+            for k in base_kernel.kernels:
+                if hasattr(k, 'lengthscale'):
+                    params.append(k.lengthscale.detach().cpu().numpy())
+                if hasattr(k, 'period_length'):
+                    params.append(k.period_length.detach().cpu().item())
+            params.append(outputscale)
+            params.append(noise_var)
+            return params
+        
+        elif hasattr(base_kernel, 'lengthscale'):  # RBF, Matern, etc.
+            lengthscale = base_kernel.lengthscale.detach().cpu().numpy()
+            if hasattr(base_kernel, 'period_length'):  # Periodic kernel
+                period = base_kernel.period_length.detach().cpu().item()
+                return [lengthscale, period, outputscale, noise_var]
+            else:
+                return [lengthscale, outputscale, noise_var]
+    
+    return "unknown kernel"
 
 def compute_metrics(y_true, mu, var, proj_obj=None, center_offset=None):
     """compute all evaluation metrics"""

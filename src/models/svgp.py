@@ -6,7 +6,7 @@ from gpytorch.variational import (
 )
 
 class SVGPModel(gpytorch.models.ApproximateGP):
-    def __init__(self, inducing_points, kernel):
+    def __init__(self, inducing_points, kernel, mean_module=None):
         M, _ = inducing_points.shape
         q_dist = NaturalVariationalDistribution(M)
 
@@ -19,7 +19,10 @@ class SVGPModel(gpytorch.models.ApproximateGP):
 
         super().__init__(strategy)
 
-        self.mean_module = gpytorch.means.ConstantMean()
+        if mean_module is None:
+            self.mean_module = gpytorch.means.ZeroMean()
+        else:
+            self.mean_module = mean_module
         self.covar_module = kernel
 
     def forward(self, x):

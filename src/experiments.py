@@ -2,12 +2,11 @@ import torch
 import pandas as pd
 from tqdm import tqdm
 import numpy as np
-
+import copy # to avoid parameters being shared between kernels
 from .config import TrainCfg, SVGPcfg
-from .training import run_exact, run_proj, run_svgp, predict_svgp
+from .training import run_exact, run_proj, run_svgp, predict_svgp, run_proj_multiscale
 from .utils import plot_posteriors_auto
 from .kernels import SM_kernel
-
 
 
 def run_exact_proj_svgp(
@@ -19,43 +18,92 @@ def run_exact_proj_svgp(
     x_plot=None,
     x_grid=None, grid_shape=None, extent=None,
     savepath=None, add_svgp_heatmap=True,
-    flag=True
+    flag=True,
+    # multi-scale toggles:
+    use_multiscale=False, d_list=None
 ):
     """main experiment orchestrator"""
+    from .utils import set_seed
+    set_seed(cfg.seed)
+    
     device = y_train.device
     D = x_train.shape[1]
     y_std_train = float(torch.std(y_train))
 
-    if kernel_exact is not None:
-        flag = False
-    else:
+    # default SM kernels only if none provided
+    if kernel_exact is None:
         k_exact = SM_kernel(num_mixtures, D, y_std=y_std_train)
+    else:
+        k_exact = copy.deepcopy(kernel_exact)
+        
+    if kernel_proj is None:
         k_proj = SM_kernel(num_mixtures, D, y_std=y_std_train)
+    else:
+        k_proj = copy.deepcopy(kernel_proj)
 
-    if add_svgp:
+    if add_svgp and kernel_svgp is None:
         k_svgp = SM_kernel(num_mixtures, D, y_std=y_std_train)
-    torch.manual_seed(cfg.seed)
+    elif add_svgp:
+        k_svgp = copy.deepcopy(kernel_svgp)
 
+    # exact GP
     res_exact = run_exact(x_train, y_train, x_test, y_test, k_exact, cfg, init_from_data=init_hyps_data, flag=flag)
-    res_proj = run_proj(x_train, y_train, x_test, y_test, k_proj, d_proj, cfg, init_from_data=init_hyps_data, flag=flag)
-    res_svgp  = None
+    
+    # projection GP (single-scale or multi-scale)
+    if use_multiscale:
+        if d_list is None:
+            d_list = [d_proj//4, d_proj//2, d_proj//4]  # default split
+            current_total = sum(d_list)
+            if current_total != d_proj:
+                d_list[-1] += (d_proj - current_total)
+        
+        print(f"Running multi-scale projection with d_list = {d_list} (total d = {sum(d_list)})")
+        res_proj = run_proj_multiscale(
+            x_train, y_train, x_test, y_test, k_proj, cfg,
+            d_list=d_list, init_from_data=init_hyps_data, 
+            flag=flag
+        )
+        
+        res_proj['d_list'] = d_list
+        res_proj['total_d'] = sum(d_list)
+    else:
+        res_proj = run_proj(x_train, y_train, x_test, y_test, k_proj, d_proj, cfg, init_from_data=init_hyps_data, flag=flag)
+    res_svgp = None
     if add_svgp:
         res_svgp = run_svgp(x_train, y_train, x_test, y_test, k_svgp, svgp_cfg, device=device, flag=flag)
 
-    # results table(s)
+    # results
+    method_name = 'multiscale' if use_multiscale else 'spherical'
     df = pd.DataFrame({
         'exact'     : [res_exact['metrics']['RMSE'], res_exact['metrics']['R2'], res_exact['metrics']['NLPD'], res_exact['metrics']['COV95'], res_exact['metrics']['PIW95'], res_exact['train_time']],
-        'spherical' : [res_proj ['metrics']['RMSE'], res_proj ['metrics']['R2'], res_proj ['metrics']['NLPD'], res_proj ['metrics']['COV95'], res_proj ['metrics']['PIW95'], res_proj ['train_time']],
+        method_name : [res_proj ['metrics']['RMSE'], res_proj ['metrics']['R2'], res_proj ['metrics']['NLPD'], res_proj ['metrics']['COV95'], res_proj ['metrics']['PIW95'], res_proj ['train_time']],
     }, index=['RMSE_test','R2_test','NLPD_test', 'COV95_test', 'PIW95_test', 'time_sec'])
 
     if add_svgp and res_svgp is not None:
         df['SVGP'] = [res_svgp['metrics']['RMSE'], res_svgp['metrics']['R2'], res_svgp['metrics']['NLPD'], res_svgp['metrics']['COV95'], res_svgp['metrics']['PIW95'], res_svgp['train_time']]
 
     if flag:
+        exact_params = res_exact['params']
+        proj_params = res_proj['params']
+        
+        # parameter names based on kernel
+        if kernel_exact is None or hasattr(kernel_exact, 'mixture_weights'):
+            param_names = ['weight', 'scale', 'mean', 'noise_var']
+        elif hasattr(kernel_exact, 'base_kernel'):
+            base_kernel = kernel_exact.base_kernel
+            if hasattr(base_kernel, 'period_length'):
+                param_names = ['lengthscale', 'period', 'outputscale', 'noise_var']
+            elif hasattr(base_kernel, 'kernels'):
+                # for composite kernels like periodic * rbf, we have: [lengthscale1, period, lengthscale2, outputscale, noise_var]
+                param_names = ['lengthscale1', 'period', 'lengthscale2', 'outputscale', 'noise_var']
+            else:
+                param_names = ['lengthscale', 'outputscale', 'noise_var'] # rbf, matern
+        
         df_hyp = pd.DataFrame({
-            'GPyTorch (exact)': res_exact['params'],
-            'GPyTorch (proj)' : res_proj['params'],
-        }, index=['weight', 'scale', 'mean', 'noise_var'])
+            'GPyTorch (exact)': exact_params,
+            f'GPyTorch ({method_name})' : proj_params,
+        }, index=param_names)
+        
         if add_svgp:
             df_hyp['GPyTorch (SVGP)'] = res_svgp['params']
 
@@ -64,17 +112,20 @@ def run_exact_proj_svgp(
     print(df)
     
     # plotting
+    d_proj_for_plot = res_proj.get('total_d', d_proj) if use_multiscale else d_proj
     _ = plot_posteriors_auto(
-    D=x_train.shape[1],
-    res_exact=res_exact, res_proj=res_proj, res_svgp=res_svgp,
-    x_test=x_test, y_test=y_test, x_plot=x_plot,
-    x_train=x_train, x_grid=x_grid, grid_shape=grid_shape, extent=extent,
-    d_proj=d_proj,
-    predict_svgp_fn=predict_svgp,
-    plot1d_fn=None,
-    add_svgp_heatmap=add_svgp_heatmap,
-    savepath=savepath 
+        D=x_train.shape[1],
+        res_exact=res_exact, res_proj=res_proj, res_svgp=res_svgp,
+        x_test=x_test, y_test=y_test, x_plot=x_plot,
+        x_train=x_train, x_grid=x_grid, grid_shape=grid_shape, extent=extent,
+        d_proj=d_proj_for_plot,
+        predict_svgp_fn=predict_svgp,
+        plot1d_fn=None,
+        add_svgp_heatmap=add_svgp_heatmap,
+        savepath=savepath 
     )
+
+    return res_exact, res_proj, res_svgp
 
 def run_sweep_d_agg(
     x_train, y_train, x_test, y_test,
@@ -108,8 +159,13 @@ def run_sweep_d_agg(
         res_first = None
 
         for r in range(n_repeats):
-            # fresh kernel each repeat to avoid parameter carry-over
-            k_proj = SM_kernel(num_mixtures, D, y_std=y_std_train)
+            # Use provided kernel or create default SM kernel
+            if kernel_proj is None:
+                k_proj = SM_kernel(num_mixtures, D, y_std=y_std_train)
+            else:
+                # Create a fresh copy of the provided kernel to avoid parameter sharing
+                import copy
+                k_proj = copy.deepcopy(kernel_proj)
 
             # change seed so ProjectionObjective gets different Omega and optimiser noise differs
             seed_shift = 1000 * i + r
@@ -144,7 +200,6 @@ def run_sweep_d_agg(
             mean[3], std[3],     # time_sec
         ])
 
-    # build tidy DF
     results_df = pd.DataFrame(
         rows,
         columns=[
@@ -194,17 +249,20 @@ def run_sweep_d_agg(
     if len(ax_nlpd.get_legend_handles_labels()[0]) > 0: ax_nlpd.legend(frameon=False)
 
     # time
-    plot_band(ax_time, results_df['time_sec_mean'].values, results_df['time_sec_std'].values, 'train time vs d', 'seconds')
+    plot_band(ax_time, results_df['time_sec_mean'].values, results_df['time_sec_std'].values, 'time vs d', 'time (sec)')
+    maybe_baseline(ax_time, res_exact, 'time_sec', 'exact', ls='--')
+    maybe_baseline(ax_time, res_svgp,  'time_sec', 'SVGP', ls=':')
+    if len(ax_time.get_legend_handles_labels()[0]) > 0: ax_time.legend(frameon=False)
 
     plt.tight_layout()
     if savepath:
         plt.savefig(savepath, dpi=220, bbox_inches='tight')
+        print(f"saved plot to {savepath}")
     plt.show()
 
-    # quick summary
-    best_d = int(results_df['RMSE_mean'].idxmin())
-    print(
-        f"[sweep-d agg] best d by RMSE_mean: {best_d} "
+    # pick best d by RMSE
+    best_d = results_df['RMSE_mean'].idxmin()
+    print(f"\nbest d={best_d} " + 
         f"(RMSE={results_df.loc[best_d,'RMSE_mean']:.4f}+/-{results_df.loc[best_d,'RMSE_std']:.4f}, "
         f"R2={results_df.loc[best_d,'R2_mean']:.4f}+/-{results_df.loc[best_d,'R2_std']:.4f}, "
         f"NLPD={results_df.loc[best_d,'NLPD_mean']:.4f}+/-{results_df.loc[best_d,'NLPD_std']:.4f}, "
@@ -234,8 +292,13 @@ def repeat_spherical_runs_for_d(
     res_list = []
 
     for r in tqdm(range(k)):
-        # fresh kernel each repeat (avoid parameter carry-over)
-        k_proj = SM_kernel(num_mixtures, D, y_std=y_std_train)
+        # Use provided kernel or create default SM kernel
+        if kernel_proj is None:
+            k_proj = SM_kernel(num_mixtures, D, y_std=y_std_train)
+        else:
+            # Create a fresh copy of the provided kernel to avoid parameter sharing
+            import copy
+            k_proj = copy.deepcopy(kernel_proj)
 
         # change seed so ProjectionObjective gets different Omega
         cfg_r = TrainCfg(**{**vars(cfg), 'seed': cfg.seed + r})
@@ -247,13 +310,26 @@ def repeat_spherical_runs_for_d(
         )
         res_list.append(res)
 
-        # hyperparameters (handle Q=1 vs Q>1 by simple averaging for plotting)
-        w, s, m, nv = res['params']
-        if isinstance(w, np.ndarray):   # Q>1
-            w_val = float(np.mean(w)); s_val = float(np.mean(s)); m_val = float(np.mean(m))
-        else:                           # Q=1
-            w_val = float(w); s_val = float(s); m_val = float(m)
-        weights.append(w_val); scales.append(s_val); means.append(m_val); noises.append(float(nv))
+        # hyperparameters (handle different kernel types)
+        params = res['params']
+        if len(params) == 4:  # SM kernel: [weight, scale, mean, noise_var]
+            w, s, m, nv = params
+            if isinstance(w, np.ndarray):   # Q>1
+                w_val = float(np.mean(w)); s_val = float(np.mean(s)); m_val = float(np.mean(m))
+            else:                           # Q=1
+                w_val = float(w); s_val = float(s); m_val = float(m)
+            weights.append(w_val); scales.append(s_val); means.append(m_val); noises.append(float(nv))
+        elif len(params) == 3:  # RBF/Matern: [lengthscale, outputscale, noise_var]
+            ls, os, nv = params
+            weights.append(float(ls)); scales.append(float(os)); means.append(0.0); noises.append(float(nv))
+        elif len(params) == 4 and kernel_proj is not None and hasattr(kernel_proj.base_kernel, 'period_length'):  # Periodic: [lengthscale, period, outputscale, noise_var]
+            ls, p, os, nv = params
+            weights.append(float(ls)); scales.append(float(p)); means.append(float(os)); noises.append(float(nv))
+        elif len(params) == 5 and kernel_proj is not None and hasattr(kernel_proj.base_kernel, 'kernels'):  # Composite: [lengthscale1, period, lengthscale2, outputscale, noise_var]
+            ls1, p, ls2, os, nv = params
+            weights.append(float(ls1)); scales.append(float(p)); means.append(float(ls2)); noises.append(float(os))
+        else:  # Fallback
+            weights.append(0.0); scales.append(0.0); means.append(0.0); noises.append(float(params[-1]))
 
         # metrics
         rmses.append(float(res['metrics']['RMSE']))
@@ -261,12 +337,25 @@ def repeat_spherical_runs_for_d(
         nlpds.append(float(res['metrics']['NLPD']))
         times.append(float(res['train_time']))
 
+    # parameter names based on kernel
+    if kernel_proj is None or hasattr(kernel_proj, 'mixture_weights'):
+        param_names = ['weight', 'scale', 'mean', 'noise_var']
+    elif hasattr(kernel_proj, 'base_kernel'):
+        base_kernel = kernel_proj.base_kernel
+        if hasattr(base_kernel, 'period_length'):
+            param_names = ['lengthscale', 'period', 'outputscale', 'noise_var']
+        elif hasattr(base_kernel, 'kernels'):
+            # for composite kernels like periodic * rbf, we have: [lengthscale1, period, lengthscale2, outputscale, noise_var]
+            param_names = ['lengthscale1', 'period', 'lengthscale2', 'outputscale', 'noise_var']
+        else:
+            param_names = ['lengthscale', 'outputscale', 'noise_var'] # rbf, matern
+
     # dataframes
     df_hyp = pd.DataFrame({
-        'weight': weights,
-        'scale': scales,
-        'mean': means,
-        'noise_var': noises
+        param_names[0]: weights,
+        param_names[1]: scales,
+        param_names[2]: means,
+        param_names[3]: noises
     })
     df_metric = pd.DataFrame({
         'RMSE': rmses,
@@ -280,7 +369,9 @@ def repeat_spherical_runs_for_d(
     exact_nlpd_val = None
     if res_exact is not None:
         try:
-            exact_hyp_vals = _scalarize_params(res_exact['params'])
+            w, s, m, nv = res_exact['params']
+            to_scalar = lambda x: float(np.mean(x)) if isinstance(x, np.ndarray) else float(x)
+            exact_hyp_vals = [to_scalar(w), to_scalar(s), to_scalar(m), float(nv)]
         except Exception:
             exact_hyp_vals = None
         if 'metrics' in res_exact and 'NLPD' in res_exact['metrics']:
@@ -289,9 +380,9 @@ def repeat_spherical_runs_for_d(
     # plot 1: hyperparameter boxplots (+ exact cross)
     import matplotlib.pyplot as plt
     fig1 = plt.figure(figsize=(9, 4))
-    plt.boxplot([df_hyp['weight'], df_hyp['scale'], df_hyp['mean'], df_hyp['noise_var']],
+    plt.boxplot([df_hyp[param_names[0]], df_hyp[param_names[1]], df_hyp[param_names[2]], df_hyp[param_names[3]]],
                 showfliers=False)
-    plt.xticks([1, 2, 3, 4], ['weight', 'scale', 'mean', 'noise_var'])
+    plt.xticks([1, 2, 3, 4], param_names)
     plt.ylabel('value')
     plt.title(f'spherical GP hyperparameters over {k} runs (d={d})')
     plt.grid(alpha=0.25, axis='y')
@@ -340,8 +431,4 @@ def repeat_spherical_runs_for_d(
     plt.show()
     return df_hyp, df_metric, res_list
 
-def _scalarize_params(params):
-    """params is [w, s, m, noise_var]; each of w/s/m may be scalar or np.ndarray (Q>1)"""
-    w, s, m, nv = params
-    to_scalar = lambda x: float(np.mean(x)) if isinstance(x, np.ndarray) else float(x)
-    return to_scalar(w), to_scalar(s), to_scalar(m), float(nv)
+

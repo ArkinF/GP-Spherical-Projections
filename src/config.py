@@ -13,6 +13,8 @@ class TrainCfg:
     verbose: bool = True
     print_every: int = 100
     upper_noise_constraint: int = 0.2
+    noise_init: float = 0.1
+    mean_cfg: str = "zero"
 
 @dataclass
 class SVGPcfg:
@@ -27,3 +29,4 @@ class SVGPcfg:
     verbose: bool = True
     print_every: int = 200
     init_hyps_data: bool = False
+    mean_cfg: str = "zero"

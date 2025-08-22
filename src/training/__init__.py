@@ -6,7 +6,8 @@ from .trainers import (
     predict_svgp,
     run_exact,
     run_proj,
-    run_svgp
+    run_svgp,
+    run_proj_multiscale
 )
 
 __all__ = [
@@ -17,5 +18,6 @@ __all__ = [
     'predict_svgp',
     'run_exact',
     'run_proj',
-    'run_svgp'
+    'run_svgp',
+    'run_proj_multiscale'
 ]
