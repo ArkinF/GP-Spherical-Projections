@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Main script for running Gaussian Process experiments.
+main script for running gp experiments.
 
-Usage:
+usage:
     python main.py --experiment toy_1d
     python main.py --experiment toy_2d
     python main.py --experiment co2
@@ -17,7 +17,6 @@ import sys
 import torch
 import numpy as np
 
-# add src to path
 sys.path.append('src')
 
 from src.experiments import (
@@ -26,7 +25,6 @@ from src.experiments import (
 from src.config import TrainCfg, SVGPcfg
 from src.kernels import SM_kernel
 
-# Import data generation functions from src module
 from src.data_generation import generate_toy_1d, generate_toy_2d
 
 def run_toy_1d_experiment():
@@ -61,7 +59,7 @@ def run_matern_experiment():
     
     from src.kernels import stable_matern_kernel
     
-    # Create Matern kernels
+    # create Matern kernels
     kernel_exact = stable_matern_kernel(init_lengthscale=1.0, nu=2.5)
     kernel_proj = stable_matern_kernel(init_lengthscale=1.0, nu=2.5)
     
@@ -82,7 +80,7 @@ def run_periodic_plus_rbf_experiment():
     
     from src.kernels import long_periodic_plus_short_rbf
     
-    # Create periodic + RBF kernels
+    # create periodic + RBF kernels
     kernel_exact = long_periodic_plus_short_rbf(init_period=1.0, init_rbf_lengthscale=0.1)
     kernel_proj = long_periodic_plus_short_rbf(init_period=1.0, init_rbf_lengthscale=0.1)
     
@@ -218,7 +216,6 @@ def run_multiscale_matern_experiment():
     from src.kernels import stable_matern_kernel
     from src.experiments import run_exact_proj_svgp
     
-    # create Matern kernel
     kernel_matern = stable_matern_kernel(init_lengthscale=1.0, nu=2.5)
     
     run_exact_proj_svgp(
@@ -244,7 +241,7 @@ def main():
     
     args = parser.parse_args()
     
-    # Original experiments
+    # original experiments
     if args.experiment == 'toy_1d':
         run_toy_1d_experiment()
     elif args.experiment == 'toy_2d':
@@ -260,7 +257,7 @@ def main():
     elif args.experiment == 'd_sweep_matern':
         run_d_sweep_matern_experiment()
     
-    # Multi-scale experiments
+    # multi-scale experiments
     elif args.experiment == 'multiscale_1d':
         run_multiscale_1d_experiment()
     elif args.experiment == 'multiscale_2d':

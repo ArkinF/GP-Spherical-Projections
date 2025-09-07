@@ -4,7 +4,7 @@ from scipy.stats import norm
 Z95 = norm.ppf(0.975)
 
 def compute_cov95_and_piwidth(y_true, mu, var, center_offset=None):
-    """compute coverage and prediction interval width"""
+    """compute coverage and prediction width"""
     # to numpy 1D
     to_np = lambda x: x.detach().cpu().numpy() if hasattr(x, "detach") else np.asarray(x)
     y = to_np(y_true).ravel()
@@ -21,7 +21,7 @@ def compute_cov95_and_piwidth(y_true, mu, var, center_offset=None):
     return float(coverage), float(width)
 
 def extract_hyp(model, likelihood=None):
-    """extract hyperparameters from model, handling different kernel types"""
+    """extract hyperparameters from model"""
     kernel = model.covar_module
     
     # noise variance
@@ -31,7 +31,7 @@ def extract_hyp(model, likelihood=None):
         noise_var = likelihood.noise.detach().cpu().item()
     
     # extract based kernel
-    if hasattr(kernel, 'mixture_weights'):  # Spectral Mixture kernel
+    if hasattr(kernel, 'mixture_weights'):  # spectral mixture kernel
         w = kernel.mixture_weights.detach().cpu().numpy().flatten()
         m = kernel.mixture_means.detach().cpu().numpy().flatten()
         s = kernel.mixture_scales.detach().cpu().numpy().flatten()
@@ -56,9 +56,9 @@ def extract_hyp(model, likelihood=None):
             params.append(noise_var)
             return params
         
-        elif hasattr(base_kernel, 'lengthscale'):  # RBF, Matern, etc.
+        elif hasattr(base_kernel, 'lengthscale'):  # rbf, matern, etc.
             lengthscale = base_kernel.lengthscale.detach().cpu().numpy()
-            if hasattr(base_kernel, 'period_length'):  # Periodic kernel
+            if hasattr(base_kernel, 'period_length'):  # periodic kernel
                 period = base_kernel.period_length.detach().cpu().item()
                 return [lengthscale, period, outputscale, noise_var]
             else:
@@ -67,7 +67,7 @@ def extract_hyp(model, likelihood=None):
     return "unknown kernel"
 
 def compute_metrics(y_true, mu, var, proj_obj=None, center_offset=None):
-    """compute all evaluation metrics"""
+    """compute evaluation metrics"""
     to_np = lambda x: x.detach().cpu().numpy() if hasattr(x, "detach") else np.asarray(x)
     y = to_np(y_true).ravel()
     m = to_np(mu).ravel()

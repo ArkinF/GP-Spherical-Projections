@@ -30,7 +30,14 @@ The project implements and compares three Gaussian Process approaches:
 pip install -r requirements.txt
 ```
 
-2. Run experiments:
+2. Run experiments via main script:
+```bash
+python main.py --experiment toy_1d
+python main.py --experiment toy_2d
+python main.py --experiment d_sweep
+```
+
+3. Or use Jupyter notebooks:
 ```bash
 cd notebooks
 jupyter lab
@@ -40,7 +47,7 @@ jupyter lab
 
 - **Modular Design**: Clean separation of models, kernels, and training code
 - **Comprehensive Testing**: Multiple datasets and experimental setups
-- **Visualization**: Built-in plotting utilities for posterior analysis
+- **Visualisation**: Built-in plotting utilities for posterior analysis
 - **Scalability**: Efficient implementations for large-scale datasets
 
 ## Datasets
@@ -51,10 +58,8 @@ jupyter lab
 - **CASP Protein**: Protein tertiary structure prediction
 - **Power Plant**: Combined cycle power plant data
 - **Sunspots**: Monthly sunspot activity data
+- **CCPP**: Combined cycle power plant data
 
 ## Results
 
 The experiments demonstrate the effectiveness of spherical projection methods in maintaining accuracy while improving computational efficiency compared to exact GP methods.
-# GP-Spherical
-# GP-Spherical
-# GP-Spherical-Projections

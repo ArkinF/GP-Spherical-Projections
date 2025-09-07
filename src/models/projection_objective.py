@@ -106,12 +106,12 @@ class MultiScaleProjectionObjective(torch.nn.Module):
 
     @property 
     def d(self):
-        """total effective dimension across all scales"""
+        """total dimension across all scales"""
         return sum(self.d_list)
 
     @torch.no_grad()
     def resample_omegas(self, seed=None):
-        """resample omegas for all scales"""
+        """resample omegas"""
         total_d, n = self.Omegas.shape
         if seed is not None:
             g = torch.Generator(device=self.y.device); g.manual_seed(seed)
@@ -124,7 +124,7 @@ class MultiScaleProjectionObjective(torch.nn.Module):
         self.proj_y.copy_(Omegas @ self.y)
 
     def forward(self):
-        """compute multi-scale loss as average across scales"""
+        """compute loss as average across scales"""
         X = self.model.train_inputs[0]
         K = self.model.covar_module(X).add_jitter(self.jitter)
 

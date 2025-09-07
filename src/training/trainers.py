@@ -14,10 +14,10 @@ from ..models import (
 )
 
 def train_exact(model, likelihood, x_train, y_train, cfg: TrainCfg):
-    """train exact GP model"""
+    """train exact gp"""
     model.train(); likelihood.train()
 
-    # optimizer
+    # optimiser
     if cfg.use_lbfgs:
         opt = torch.optim.LBFGS(model.parameters(),
                                lr=cfg.lr, max_iter=20, tolerance_grad=1e-5, tolerance_change=1e-9)
@@ -90,7 +90,7 @@ def train_exact(model, likelihood, x_train, y_train, cfg: TrainCfg):
 
 
 def train_proj(proj_obj, model, likelihood, cfg: TrainCfg):
-    """train projection GP model"""
+    """train projection gp"""
     model.train(); likelihood.train()
     
     if cfg.use_lbfgs:
@@ -124,7 +124,7 @@ def train_proj(proj_obj, model, likelihood, cfg: TrainCfg):
             opt.step()
 
             # refresh projection directions to reduce MC bias
-            if (it > 0) and (it % 25 == 0):
+            if (it > 0) and (it % cfg.resample_every == 0):
                 with torch.no_grad():
                     proj_obj.resample_omegas(seed=cfg.seed + it)
 
@@ -159,14 +159,14 @@ def train_proj(proj_obj, model, likelihood, cfg: TrainCfg):
     return dict(loss=best, train_time=t)
 
 def train_svgp(model, likelihood, x_train, y_train, cfg: SVGPcfg, device=None):
-    """train SVGP model"""
+    """train svgp"""
     if device is None:
         device = y_train.device
 
     # elbo (beta=1)
     mll = gpytorch.mlls.VariationalELBO(likelihood, model, num_data=x_train.shape[0])
 
-    # optimizers
+    # optimisers
     ngd  = gpytorch.optim.NGD(model.variational_parameters(), num_data=x_train.shape[0], lr=cfg.lr_ngd)
     adam = torch.optim.Adam(list(model.hyperparameters()) + list(likelihood.parameters()), lr=cfg.lr_hyp)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(adam, mode='max', factor=0.5, patience=5)
@@ -215,7 +215,6 @@ def train_svgp(model, likelihood, x_train, y_train, cfg: SVGPcfg, device=None):
 
             # progress reporting
             if step % cfg.print_every == 0 or step == cfg.steps:
-                # compute gradient norm for hyperparameters
                 grad_norm = 0.0
                 num_params = 0
                 for param in model.hyperparameters():
@@ -260,7 +259,7 @@ def predict_test(model, likelihood, X):
 
 @torch.no_grad()
 def predict_svgp(model, likelihood, X, batch_size=4096, device=None):
-    """predict with SVGP model"""
+    """predict with svgp"""
     model.eval(); likelihood.eval()
     means, vars_ = [], []
     for i in range(0, X.shape[0], batch_size):
@@ -272,7 +271,8 @@ def predict_svgp(model, likelihood, X, batch_size=4096, device=None):
     return torch.cat(means), torch.cat(vars_)
 
 def run_exact(x_train, y_train, x_test, y_test, kernel, cfg: TrainCfg, init_from_data: bool=False, flag=True):
-    """run complete exact GP experiment"""
+    """run exact gp experiment"""
+    
     likelihood = gpytorch.likelihoods.GaussianLikelihood()
     
     mean_module = create_mean_function(cfg.mean_cfg, input_dim=x_train.shape[1]) # mean function
@@ -294,7 +294,7 @@ def run_exact(x_train, y_train, x_test, y_test, kernel, cfg: TrainCfg, init_from
                 train_time=out['train_time'], loss=out['loss'], params=params)
 
 def run_proj(x_train, y_train, x_test, y_test, kernel, d_proj: int, cfg: TrainCfg, init_from_data: bool=False, flag=True):
-    """run complete projection GP experiment"""
+    """run projection gp experiment"""
     likelihood = gpytorch.likelihoods.GaussianLikelihood()
     
     mean_module = create_mean_function(cfg.mean_cfg, input_dim=x_train.shape[1]) # mean function
@@ -325,7 +325,7 @@ def run_proj(x_train, y_train, x_test, y_test, kernel, d_proj: int, cfg: TrainCf
                 train_time=out['train_time'], loss=out['loss'], params=params)
 
 def run_svgp(x_train, y_train, x_test, y_test, kernel_svgp, cfg: SVGPcfg, num_mixtures=1, device=None, flag=True):
-    """run complete SVGP experiment"""
+    """run svgp experiment"""
     if device is None:
         device = y_train.device
 
@@ -389,10 +389,11 @@ def run_svgp(x_train, y_train, x_test, y_test, kernel_svgp, cfg: SVGPcfg, num_mi
 
 def run_proj_multiscale(x_train, y_train, x_test, y_test, kernel, cfg: TrainCfg, d_list=[50, 100, 200], 
                        init_from_data: bool=False, flag=True):
-    """run complete multi-scale projection GP experiment"""
+    """run multi-scale projection gp experiment"""
     
     likelihood = gpytorch.likelihoods.GaussianLikelihood()
-    model = ExactGPModel(x_train, y_train, likelihood, kernel)
+    mean_module = create_mean_function(cfg.mean_cfg, input_dim=x_train.shape[1]) # mean function
+    model = ExactGPModel(x_train, y_train, likelihood, kernel, mean_module=mean_module)
     if init_from_data:
         model.covar_module.initialize_from_data(x_train, y_train)
     with torch.no_grad():
@@ -402,14 +403,12 @@ def run_proj_multiscale(x_train, y_train, x_test, y_test, kernel, cfg: TrainCfg,
         model, likelihood, y_train, d_list=d_list, seed=cfg.seed, jitter=1e-4
     )
 
-    # sanity check for omegas norm
+    # check omegas norm
     with torch.no_grad():
         if hasattr(proj_obj, 'Omegas'):
-            # efficient version has single Omegas tensor
             norms = torch.norm(proj_obj.Omegas, dim=1)
             assert torch.allclose(norms, torch.ones_like(norms), atol=1e-5)
         else:
-            # modular version has separate projection objects
             for proj in proj_obj.proj_objects:
                 norms = torch.norm(proj.Omegas, dim=1)
                 assert torch.allclose(norms, torch.ones_like(norms), atol=1e-5)
@@ -433,5 +432,4 @@ def run_proj_multiscale(x_train, y_train, x_test, y_test, kernel, cfg: TrainCfg,
     )
 
     return result
-
 

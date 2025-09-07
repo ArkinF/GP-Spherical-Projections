@@ -1,12 +1,10 @@
 import gpytorch
 
 def long_periodic_plus_short_rbf(init_period=1.0, init_rbf_lengthscale=0.1):
-    # add constraints to prevent extreme values
     periodic = gpytorch.kernels.PeriodicKernel()
     periodic.period_length = init_period
     periodic.lengthscale = 1.0
     
-    # constrain lengthscales to reasonable ranges
     periodic.register_constraint("raw_lengthscale", gpytorch.constraints.GreaterThan(1e-4))
     
     rbf_short = gpytorch.kernels.RBFKernel()
@@ -14,13 +12,12 @@ def long_periodic_plus_short_rbf(init_period=1.0, init_rbf_lengthscale=0.1):
     rbf_short.register_constraint("raw_lengthscale", gpytorch.constraints.GreaterThan(1e-4))
     
     combined = gpytorch.kernels.ScaleKernel(periodic * rbf_short)
-    # prevent outputscale from becoming too small
     combined.register_constraint("raw_outputscale", gpytorch.constraints.GreaterThan(1e-4))
     
     return combined
 
 def stable_periodic_kernel(init_period=1.0, init_lengthscale=1.0):
-    """stable periodic kernel with fixed period and lengthscale"""
+    """periodic kernel with fixed period and lengthscale"""
     periodic = gpytorch.kernels.PeriodicKernel()
     periodic.period_length = init_period
     periodic.lengthscale = init_lengthscale

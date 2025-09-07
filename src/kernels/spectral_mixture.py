@@ -2,12 +2,7 @@ import torch
 import gpytorch
 
 def SM_kernel(num_mixtures=1, num_dims=1, initial_hyps=None, y_std=None):
-    """
-    flexible SM kernel initialisation for Q=1 or Q=2 mixtures.
-    
-    Q=1 -> single component with default mid-frequency
-    Q=2 -> component 0: low frequency (trend), component 1: annual cycle
-    """
+    """sm kernel init for q=1 or q=2 mixtures"""
     kernel = gpytorch.kernels.SpectralMixtureKernel(num_mixtures=num_mixtures, ard_num_dims=num_dims)
 
     if y_std is None:

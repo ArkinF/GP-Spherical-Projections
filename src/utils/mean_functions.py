@@ -2,7 +2,7 @@ import gpytorch
 
 
 def create_mean_function(mean_type: str, input_dim: int = None):
-    """used for GP mean"""
+    """create mean function"""
     if mean_type == "zero":
         return gpytorch.means.ZeroMean()
     
