@@ -273,6 +273,7 @@ def predict_svgp(model, likelihood, X, batch_size=4096, device=None):
 def run_exact(x_train, y_train, x_test, y_test, kernel, cfg: TrainCfg, init_from_data: bool=False, flag=True):
     """run exact gp experiment"""
     
+    y_std_train = float(torch.std(y_train))
     likelihood = gpytorch.likelihoods.GaussianLikelihood()
     
     mean_module = create_mean_function(cfg.mean_cfg, input_dim=x_train.shape[1]) # mean function
@@ -281,7 +282,7 @@ def run_exact(x_train, y_train, x_test, y_test, kernel, cfg: TrainCfg, init_from
     if init_from_data:
         model.covar_module.initialize_from_data(x_train, y_train)
     with torch.no_grad():
-        likelihood.noise = cfg.noise_init
+        likelihood.noise = cfg.noise_init * y_std_train
     out = train_exact(model, likelihood, x_train, y_train, cfg)
     mu, var = predict_test(model, likelihood, x_test)
     rmse, r2, nlpd, cov95, piw95 = compute_metrics(y_test.cpu().numpy(), mu, var)
@@ -295,6 +296,9 @@ def run_exact(x_train, y_train, x_test, y_test, kernel, cfg: TrainCfg, init_from
 
 def run_proj(x_train, y_train, x_test, y_test, kernel, d_proj: int, cfg: TrainCfg, init_from_data: bool=False, flag=True):
     """run projection gp experiment"""
+
+    y_std_train = float(torch.std(y_train))
+
     likelihood = gpytorch.likelihoods.GaussianLikelihood()
     
     mean_module = create_mean_function(cfg.mean_cfg, input_dim=x_train.shape[1]) # mean function
@@ -305,7 +309,7 @@ def run_proj(x_train, y_train, x_test, y_test, kernel, d_proj: int, cfg: TrainCf
     if init_from_data:
         model.covar_module.initialize_from_data(x_train, y_train)
     with torch.no_grad():
-        likelihood.noise = cfg.noise_init
+        likelihood.noise = cfg.noise_init * y_std_train
     proj_obj = ProjectionObjective(model, likelihood, y_train, d=d_proj, seed=cfg.seed, jitter=1e-4)
 
     # sanity: omegas unit norm

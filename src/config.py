@@ -13,7 +13,7 @@ class TrainCfg:
     verbose: bool = True
     print_every: int = 100
     upper_noise_constraint: int = 0.2
-    noise_init: float = 0.1
+    noise_init: float = 0.01
     mean_cfg: str = "zero"
     resample_every: int = 25
     use_separate_noise_lr: bool = True
